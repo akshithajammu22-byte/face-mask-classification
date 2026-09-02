@@ -375,26 +375,57 @@ print(f"✅ Model saved to '{model_save_path}' ({os.path.getsize(model_save_path
 """)
 
 # --- 8. INTERACTIVE CUSTOM IMAGE CLASSIFIER ---
-add_md("""## 8. 🚀 Interactive Custom Image Classifier (Upload Any Image!)
-Upload any external image (JPG, PNG, WebP) from your computer using the widget below to classify it in real time!""")
+add_md("""## 8. 🚀 Interactive Custom Image Classifier (with Smart Face Detection!)
+Upload any external image (close-up or full portrait photo) from your computer. The pipeline automatically **detects the face**, **crops it**, and **classifies whether the person is wearing a mask**!""")
 
 add_code("""import ipywidgets as widgets
 from IPython.display import display, HTML, clear_output
+import matplotlib.patches as patches
 
-def classify_uploaded_image(image_bytes):
-    \"\"\"Predict mask status for an uploaded image bytes\"\"\"
+try:
+    import cv2
+    OPENCV_AVAILABLE = True
+except ImportError:
+    OPENCV_AVAILABLE = False
+
+def detect_face_boxes(pil_img):
+    \"\"\"Detect faces in the image and return bounding boxes [ (x1, y1, x2, y2), ... ]\"\"\"
+    if not OPENCV_AVAILABLE:
+        return []
     try:
-        pil_img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-    except Exception as e:
-        return f"Error opening image: {e}", None, None
+        cv_img = np.array(pil_img.convert('RGB'))
+        gray = cv2.cvtColor(cv_img, cv2.COLOR_RGB2GRAY)
         
+        # Load frontal face cascades
+        cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
+        
+        if len(faces) == 0:
+            alt_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_alt2.xml')
+            faces = alt_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(30, 30))
+            
+        boxes = []
+        h_img, w_img = cv_img.shape[:2]
+        for (x, y, w, h) in faces:
+            margin_x = int(0.20 * w)
+            margin_y = int(0.20 * h)
+            x1 = max(0, x - margin_x)
+            y1 = max(0, y - margin_y)
+            x2 = min(w_img, x + w + margin_x)
+            y2 = min(h_img, y + h + margin_y)
+            boxes.append((x1, y1, x2, y2, x, y, w, h))
+        return boxes
+    except Exception:
+        return []
+
+def classify_crop(img_crop):
+    \"\"\"Classify a face crop tensor\"\"\"
     transform = transforms.Compose([
         transforms.Resize((160, 160)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
-    
-    tensor = transform(pil_img).unsqueeze(0).to(device)
+    tensor = transform(img_crop.convert('RGB')).unsqueeze(0).to(device)
     
     model.eval()
     with torch.no_grad():
@@ -405,8 +436,7 @@ def classify_uploaded_image(image_bytes):
     pred_class = class_names[pred_idx.item()]
     conf_pct = conf.item() * 100
     prob_dict = {class_names[i]: probs[i].item() * 100 for i in range(len(class_names))}
-    
-    return pil_img, pred_class, conf_pct, prob_dict
+    return pred_class, conf_pct, prob_dict
 
 # Build Interactive UI Widgets
 uploader = widgets.FileUpload(
@@ -424,7 +454,6 @@ def on_upload_change(change):
         if not uploader.value:
             return
             
-        # Get uploaded file content (supports both ipywidgets v7 and v8)
         val = uploader.value
         if isinstance(val, (tuple, list)):
             file_info = val[0]
@@ -438,29 +467,54 @@ def on_upload_change(change):
         else:
             print("Unsupported upload format.")
             return
+            
+        try:
+            pil_img = Image.open(io.BytesIO(content)).convert('RGB')
+        except Exception as e:
+            print(f"Error opening image: {e}")
+            return
+            
+        # Detect face(s)
+        face_boxes = detect_face_boxes(pil_img)
         
-        pil_img, pred_class, conf_pct, prob_dict = classify_uploaded_image(content)
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), gridspec_kw={'width_ratios': [1.3, 1]})
         
-        # Color coding
+        # Display main image with bounding box
+        axes[0].imshow(pil_img)
+        axes[0].set_title(f"Uploaded: {filename}", fontsize=11, fontweight='bold')
+        axes[0].axis('off')
+        
+        if len(face_boxes) > 0:
+            # Primary face (largest)
+            largest_face = max(face_boxes, key=lambda b: (b[2]-b[0]) * (b[3]-b[1]))
+            x1, y1, x2, y2, rx, ry, rw, rh = largest_face
+            face_crop = pil_img.crop((x1, y1, x2, y2))
+            
+            pred_class, conf_pct, prob_dict = classify_crop(face_crop)
+            is_mask = (pred_class == 'WithMask')
+            box_color = '#22c55e' if not is_mask else '#3b82f6'
+            tag_text = f"Without Mask ({conf_pct:.1f}%)" if not is_mask else f"With Mask ({conf_pct:.1f}%)"
+            
+            # Draw rectangle around detected face
+            rect = patches.Rectangle((rx, ry), rw, rh, linewidth=3, edgecolor=box_color, facecolor='none')
+            axes[0].add_patch(rect)
+            axes[0].text(rx, max(0, ry - 8), tag_text, color='white', fontsize=10, fontweight='bold',
+                         bbox=dict(facecolor=box_color, edgecolor='none', boxstyle='round,pad=0.3'))
+        else:
+            # Direct whole image classification
+            pred_class, conf_pct, prob_dict = classify_crop(pil_img)
+            
         is_mask = (pred_class == 'WithMask')
         badge_color = '#16a34a' if is_mask else '#2563eb'
         emoji = '😷' if is_mask else '😊'
         status_text = 'WITH MASK' if is_mask else 'WITHOUT MASK'
         
-        # Display layout
-        fig, axes = plt.subplots(1, 2, figsize=(10, 4), gridspec_kw={'width_ratios': [1.2, 1]})
-        
-        # Show image
-        axes[0].imshow(pil_img)
-        axes[0].set_title(f"Uploaded: {filename}", fontsize=11)
-        axes[0].axis('off')
-        
-        # Show probability bar chart
+        # Plot probability bar chart
         classes = list(prob_dict.keys())
         probabilities = [prob_dict[c] for c in classes]
-        colors = ['#16a34a' if c == 'WithMask' else '#dc2626' for c in classes]
+        bar_colors = ['#16a34a' if c == 'WithMask' else '#dc2626' for c in classes]
         
-        bars = axes[1].barh(classes, probabilities, color=colors, height=0.5, edgecolor='black')
+        bars = axes[1].barh(classes, probabilities, color=bar_colors, height=0.5, edgecolor='black')
         axes[1].set_xlim(0, 100)
         axes[1].set_xlabel('Confidence (%)', fontweight='bold')
         axes[1].set_title('Prediction Probabilities', fontweight='bold')
@@ -474,10 +528,10 @@ def on_upload_change(change):
         plt.tight_layout()
         plt.show()
         
-        # Formatted HTML card
+        face_info = "⚡ <b>Face Detected & Auto-Cropped:</b> Yes" if len(face_boxes) > 0 else "⚡ <b>Face Crop:</b> Direct Full Frame"
         html_card = f\"\"\"
-        <div style="background: linear-gradient(135deg, #1e293b, #0f172a); color: white; padding: 18px 24px; border-radius: 12px; margin-top: 10px; max-width: 600px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
-            <div style="font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 6px;">Classification Result</div>
+        <div style="background: linear-gradient(135deg, #1e293b, #0f172a); color: white; padding: 18px 24px; border-radius: 12px; margin-top: 10px; max-width: 650px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);">
+            <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 4px;">{face_info}</div>
             <div style="display: flex; align-items: center; justify-content: space-between;">
                 <div style="font-size: 24px; font-weight: bold; color: {badge_color};">
                     {emoji} {status_text}
@@ -502,13 +556,22 @@ display(widgets.VBox([
 # --- 9. STANDALONE PYTHON FUNCTION ---
 add_md("### Standalone Python Function\nYou can also classify any image path directly in code:")
 add_code("""def predict_image_path(image_path):
-    \"\"\"Classify any image from its file path\"\"\"
+    \"\"\"Classify any image from its file path with smart face auto-cropping\"\"\"
     if not os.path.exists(image_path):
         print(f"Error: File '{image_path}' does not exist.")
         return
         
-    with open(image_path, 'rb') as f:
-        pil_img, pred_class, conf_pct, prob_dict = classify_uploaded_image(f.read())
+    pil_img = Image.open(image_path).convert('RGB')
+    face_boxes = detect_face_boxes(pil_img)
+    
+    if len(face_boxes) > 0:
+        largest_face = max(face_boxes, key=lambda b: (b[2]-b[0]) * (b[3]-b[1]))
+        x1, y1, x2, y2 = largest_face[:4]
+        face_crop = pil_img.crop((x1, y1, x2, y2))
+        pred_class, conf_pct, prob_dict = classify_crop(face_crop)
+        print("⚡ Face detected and auto-cropped for optimal accuracy!")
+    else:
+        pred_class, conf_pct, prob_dict = classify_crop(pil_img)
         
     emoji = '😷' if pred_class == 'WithMask' else '😊'
     print(f"Image       : {image_path}")
