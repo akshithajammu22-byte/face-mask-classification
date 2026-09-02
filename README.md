@@ -50,7 +50,7 @@ Actual: WithoutMask             5                    504
 Clone the repository and install dependencies:
 
 ```bash
-git clone https://github.com/akshithajammu22-bytes/face-mask-classification.git
+git clone https://github.com/akshithajammu22-byte/face-mask-classification.git
 cd face-mask-classification
 pip install torch torchvision matplotlib scikit-learn pillow ipywidgets jupyter
 ```
@@ -114,5 +114,5 @@ python train.py
 ## 👤 Author
 
 **Akshitha**
-- GitHub: [@akshithajammu22-bytes](https://github.com/akshithajammu22-bytes)
+- GitHub: [@akshithajammu22-byte](https://github.com/akshithajammu22-byte)
 - Email: akshithajammu22@gmail.com
