@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.ipynb_checkpoints/
+.pytest_cache/
+.env
+
+# Raw large dataset directory (11k images)
+# Uncomment the line below if you prefer to exclude the raw dataset from git:
+# Face Mask Dataset/
+
+# System files
+.DS_Store
+Thumbs.db
